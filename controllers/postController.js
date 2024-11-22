@@ -1,14 +1,41 @@
 const Post = require('../models/Post');
 const bucket = require('../config/googleCloud');
+const path = require('path');
+const fs = require('fs');
 
-const createPost = (req, res) => {
+const createPost = async (req, res) => {
     const { title, content } = req.body;
-    const imageUrl = req.file ? `https://storage.googleapis.com/${bucket.name}/${req.file.filename}` : null;
+    const imageFile = req.file;
 
-    Post.create(title, content, imageUrl, (err, result) => {
-        if (err) return res.status(500).json({ message: 'Error creating post' });
-        res.status(201).json({ message: 'Post created successfully', postId: result.insertId });
-    });
+    if (!imageFile) {
+        return res.status(400).json({ message: 'Image file is required' });
+    }
+
+    const fileName = Date.now() + path.extname(imageFile.originalname);
+    const filePath = path.join(__dirname, '../uploads/', imageFile.filename);
+
+    try {
+        await bucket.upload(imageFile.path, {
+            destination: fileName,
+            metadata: {
+                contentType: imageFile.mimetype,
+            },
+        });
+
+        // Hapus file dari server setelah diupload
+        fs.unlinkSync(imageFile.path);
+
+        const imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+        // Simpan postingan ke database
+        Post.create(title, content, imageUrl, (err, result) => {
+            if (err) return res.status(500).json({ message: 'Error creating post' });
+            res.status(201).json({ message: 'Post created successfully', postId: result.insertId });
+        });
+    } catch (error) {
+        console.error('Error uploading to GCS:', error);
+        res.status(500).json({ message: 'Error uploading image to Google Cloud Storage' });
+    }
 };
 
 const getAllPosts = (req, res) => {
@@ -26,10 +53,33 @@ const getPostById = (req, res) => {
     });
 };
 
-const updatePost = (req, res) => {
+const updatePost = async (req, res) => {
     const { id } = req.params;
     const { title, content } = req.body;
-    const imageUrl = req.file ? `https://storage.googleapis.com/${bucket.name}/${req.file.filename}` : null;
+    const imageFile = req.file;
+
+    let imageUrl = null;
+
+    if (imageFile) {
+        const fileName = Date.now() + path.extname(imageFile.originalname);
+
+        try {
+            await bucket.upload(imageFile.path, {
+                destination: fileName,
+                metadata: {
+                    contentType: imageFile.mimetype,
+                },
+            });
+
+            // Hapus file dari server setelah diupload
+            fs.unlinkSync(imageFile.path);
+            
+            imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        } catch (error) {
+            console.error('Error uploading to GCS:', error);
+            return res.status(500).json({ message: 'Error uploading image to Google Cloud Storage' });
+        }
+    }
 
     Post.update(id, title, content, imageUrl, (err) => {
         if (err) return res.status(500).json({ message: 'Error updating post' });
